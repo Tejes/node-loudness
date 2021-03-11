@@ -1,7 +1,7 @@
 const execa = require('execa')
 
 async function amixer (...args) {
-  return (await execa('amixer', args)).stdout
+  return (await execa('amixer', ['-D', 'pulse'].concat(args))).stdout
 }
 
 let defaultDeviceCache = null
