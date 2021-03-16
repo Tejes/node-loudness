@@ -1,56 +1,38 @@
 const execa = require('execa')
 
-async function amixer (...args) {
-  return (await execa('amixer', ['-D', 'pulse'].concat(args))).stdout
-}
-
 let defaultDeviceCache = null
-const reDefaultDevice = /Simple mixer control '([a-z0-9 -]+)',[0-9]+/i
+const reDefaultSink = /^Default sink name: (.*)$/im
+const reVolume = /volume:[^\n]*(.{3})%/i
+const reMuted = /muted: (\S+)/i
 
-function parseDefaultDevice (data) {
-  const result = reDefaultDevice.exec(data)
-
-  if (result === null) {
-    throw new Error('Alsa Mixer Error: failed to parse output')
-  }
-
-  return result[1]
+async function exec (cmd, ...args) {
+  return (await execa(cmd, args)).stdout
 }
 
-async function getDefaultDevice () {
+async function getDefaultSink () {
   if (defaultDeviceCache) return defaultDeviceCache
 
-  return (defaultDeviceCache = parseDefaultDevice(await amixer()))
-}
-
-const reInfo = /[a-z][a-z ]*: Playback [0-9-]+ \[([0-9]+)%\] (?:[[0-9.-]+dB\] )?\[(on|off)\]/i
-
-function parseInfo (data) {
-  const result = reInfo.exec(data)
-
-  if (result === null) {
-    throw new Error('Alsa Mixer Error: failed to parse output')
-  }
-
-  return { volume: parseInt(result[1], 10), muted: (result[2] === 'off') }
+  return (defaultDeviceCache = reDefaultSink.exec(await exec('pacmd', 'stat'))[1])
 }
 
 async function getInfo () {
-  return parseInfo(await amixer('get', await getDefaultDevice()))
+  const list = await exec('pacmd', 'list-sinks')
+  const sink = await getDefaultSink()
+
+  const sinkStart = list.indexOf(`name: <${sink}>`)
+  const sinkEnd = list.indexOf('name: ', sinkStart + 1)
+  const sinkText = list.substring(sinkStart, sinkEnd > 0 ? sinkEnd : undefined)
+
+  return {
+    volume: Number(reVolume.exec(sinkText)[1]),
+    muted: reMuted.exec(sinkText)[1] === 'yes'
+  }
 }
 
-exports.getVolume = async function getVolume () {
-  return (await getInfo()).volume
-}
-
-exports.setVolume = async function setVolume (val) {
-  await amixer('set', await getDefaultDevice(), val + '%')
-}
-
-exports.getMuted = async function getMuted () {
-  return (await getInfo()).muted
-}
-
-exports.setMuted = async function setMuted (val) {
-  await amixer('set', await getDefaultDevice(), val ? 'mute' : 'unmute')
+module.exports = {
+  getInfo: getInfo,
+  getVolume: async () => (await getInfo()).volume,
+  setVolume: async (val) => await exec('pactl', 'set-sink-volume', '@DEFAULT_SINK@', Number(val) + '%'),
+  getMuted: async () => (await getInfo()).muted,
+  setMuted: async (val) => await exec('pactl', 'set-sink-mute', '@DEFAULT_SINK@', val ? '1' : '0')
 }
